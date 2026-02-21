@@ -17,8 +17,15 @@ A beginner-friendly line-following robot implementation for Raspberry Pi 5 using
 
 ## Setup
 
-### Environment Installation (Conda/Miniforge)
-If your system has enough RAM:
+### Environment Installation (Miniforge/Mamba - Recommended)
+Since you have Miniforge installed, use the faster `mamba` solver:
+```bash
+mamba env create -f environment.yml
+mamba activate Pi5ServoAICamera
+```
+
+### Environment Installation (Conda Fallback)
+If you prefer standard Conda:
 ```bash
 conda env create -f environment.yml
 conda activate Pi5ServoAICamera
