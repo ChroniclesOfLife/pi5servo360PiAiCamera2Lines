@@ -1,13 +1,7 @@
 name: Pi5ServoAICamera
 channels:
   - conda-forge
-  - defaults
+  - nodefaults
 dependencies:
   - python=3.11
-  - numpy
-  - opencv
   - pip
-  - pip:
-    - gpiozero
-    - lgpio
-    - picamera2

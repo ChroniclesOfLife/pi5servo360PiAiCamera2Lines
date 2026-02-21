@@ -1,0 +1,6 @@
+numpy
+opencv-python
+# The following are Raspberry Pi 5 specific and should be installed on the Pi:
+# gpiozero
+# lgpio
+# picamera2
