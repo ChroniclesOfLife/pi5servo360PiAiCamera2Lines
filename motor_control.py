@@ -1,4 +1,4 @@
-from gpiozero import ContinuousRotationServo
+from gpiozero import Servo
 from gpiozero.pins.lgpio import LPiFactory
 import time
 
@@ -9,18 +9,18 @@ class RobotMotors:
         Default pins 12 and 13 (Physical 32 and 33) support hardware PWM on Pi 5.
         
         MG996R 360 Control Logic:
-        - 1.0: Full speed clockwise
-        - -1.0: Full speed counter-clockwise
-        - 0.0: Stop
+        - 1.0 (2ms pulse): Full speed clockwise
+        - -1.0 (1ms pulse): Full speed counter-clockwise
+        - 0.0 (1.5ms pulse): Stop
         Note: You might need to adjust 'min_pulse_width' and 'max_pulse_width' 
         specficially for MG996R if it doesn't stop exactly at 0.
         """
         self.factory = LPiFactory()
         
         # MG996R typical pulse widths: 1ms to 2ms, with 1.5ms as neutral.
-        # gpiozero defaults are usually close (0.001 to 0.002).
-        self.left_servo = ContinuousRotationServo(left_pin, pin_factory=self.factory)
-        self.right_servo = ContinuousRotationServo(right_pin, pin_factory=self.factory)
+        # We use standard Servo class and map value -1 to 1 to pulse widths.
+        self.left_servo = Servo(left_pin, min_pulse_width=0.001, max_pulse_width=0.002, pin_factory=self.factory)
+        self.right_servo = Servo(right_pin, min_pulse_width=0.001, max_pulse_width=0.002, pin_factory=self.factory)
         
         self.stop()
 

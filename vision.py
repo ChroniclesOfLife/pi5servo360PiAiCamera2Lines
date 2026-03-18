@@ -64,15 +64,14 @@ class LineFollowerVision:
                 return error
         
         elif len(contours) == 1:
-            # Fallback if only one line is seen
-            M = cv2.moments(contours[0])
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                # If we only see one line, we might want to "search" or stay relative to it
-                # For now, let's treat it as the center
-                return cx - img_center
+            # SAFETY: Only 1 border line is visible — we don't know if it's
+            # the left or right border. Guessing wrong would steer the robot
+            # OFF the track. Return None to trigger stop/search instead.
+            # TODO: In a future version, track which side was last seen and
+            #       offset by half the expected lane width for smarter recovery.
+            pass
                 
-        return None # No lines detected
+        return None # No lines detected (or only 1 = ambiguous)
 
     def stop(self):
         self.picam2.stop()
