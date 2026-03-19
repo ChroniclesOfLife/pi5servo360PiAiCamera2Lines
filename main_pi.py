@@ -13,7 +13,12 @@ def main(debug_mode=True, verbose_period=10):
     """
     # Initialize hardware
     motors = RobotMotors(left_pin=12, right_pin=13)
-    vision = LineFollowerVision(resolution=(640, 480), debug_mode=debug_mode, show_stages=False)
+    vision = LineFollowerVision(
+        resolution=(640, 480),
+        debug_mode=debug_mode,
+        show_stages=False,
+        detection_mode="hybrid",
+    )
     
     # Initialize Shared Logic Brain
     logic = RobotLogic(kp=0.005, kd=0.001, log_file="log_pibot.txt")

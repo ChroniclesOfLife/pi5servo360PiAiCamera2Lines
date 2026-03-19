@@ -2,6 +2,53 @@ import cv2
 import numpy as np
 from robot_logic import RobotLogic
 
+
+def estimate_center_error_from_hough(canny_edges, img_center, min_line_length=35, max_line_gap=20):
+    """Estimate lane-center error from Hough line segments in the ROI."""
+    lines = cv2.HoughLinesP(
+        canny_edges,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=40,
+        minLineLength=min_line_length,
+        maxLineGap=max_line_gap,
+    )
+
+    hough_lines = []
+    left_x = []
+    right_x = []
+
+    if lines is None:
+        return None, hough_lines, None, None
+
+    for line in lines[:, 0]:
+        x1, y1, x2, y2 = map(int, line)
+        dx = x2 - x1
+        dy = y2 - y1
+
+        # Keep near-vertical segments and reject near-horizontal clutter.
+        angle_deg = abs(np.degrees(np.arctan2(dy, dx)))
+        verticality = min(angle_deg, 180 - angle_deg)
+        if verticality < 55:
+            continue
+
+        x_mid = 0.5 * (x1 + x2)
+        hough_lines.append((x1, y1, x2, y2))
+
+        if x_mid < img_center:
+            left_x.append(x_mid)
+        else:
+            right_x.append(x_mid)
+
+    if not left_x or not right_x:
+        return None, hough_lines, None, None
+
+    left_mean = float(np.mean(left_x))
+    right_mean = float(np.mean(right_x))
+    lane_center = 0.5 * (left_mean + right_mean)
+    error = lane_center - img_center
+    return error, hough_lines, left_mean, right_mean
+
 def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor=2, show_pipeline=True):
     """
     Offline video processing using the shared RobotLogic.
@@ -48,9 +95,6 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
         roi_bottom = int(height * roi_bottom_ratio)
         roi = frame[roi_top:roi_bottom, 0:width].copy()
         
-        # Create a copy for processing pipeline visualization
-        pipeline_frame = roi.copy()
-        
         # ==== STAGE 1: RGB to Grayscale ====
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         
@@ -74,12 +118,19 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
         mask_clean = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_OPEN, kernel)
         
-        # ==== STAGE 6: Find contours ====
+        # ==== STAGE 6: Hough Transform on Canny edges ====
+        img_center = width / 2
+        hough_error, hough_lines, left_line_x, right_line_x = estimate_center_error_from_hough(
+            canny_edges,
+            img_center,
+        )
+
+        # ==== STAGE 7: Find contours ====
         contours, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        img_center = width / 2
+        contour_error = None
         error = None
-        detected_centers = []  # Store detected line centers for visualization
+        detection_method = "NONE"
         
         if len(contours) > 0:
             # Sort by area, find largest line blob
@@ -89,10 +140,9 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
             if M["m00"] > 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
-                detected_centers.append((cx, cy))
                 
-                # Calculate Error (Pixel distance from center)
-                error = cx - img_center
+                # Calculate contour-based error (pixel distance from center)
+                contour_error = cx - img_center
                 
                 # Draw center of detected line on ROI
                 cv2.circle(roi, (cx, cy), 12, (0, 255, 0), -1)  # Green circle at detection
@@ -105,6 +155,25 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
                 roi_overlay = roi.copy()
                 cv2.drawContours(roi_overlay, [c], 0, (0, 0, 255), 3)  # Red contour
                 cv2.addWeighted(roi_overlay, 0.4, roi, 0.6, 0, roi)
+
+        # Draw Hough segments and coordinate guide lines.
+        for x1, y1, x2, y2 in hough_lines:
+            cv2.line(roi, (x1, y1), (x2, y2), (255, 0, 255), 2)
+
+        if left_line_x is not None and right_line_x is not None:
+            lane_mid_x = int((left_line_x + right_line_x) / 2)
+            cv2.line(roi, (int(left_line_x), 0), (int(left_line_x), roi.shape[0] - 1), (255, 200, 0), 1)
+            cv2.line(roi, (int(right_line_x), 0), (int(right_line_x), roi.shape[0] - 1), (255, 200, 0), 1)
+            cv2.line(roi, (lane_mid_x, 0), (lane_mid_x, roi.shape[0] - 1), (0, 255, 255), 2)
+            cv2.circle(roi, (lane_mid_x, roi.shape[0] // 2), 8, (0, 255, 255), -1)
+
+        # Prefer Hough-coordinate error for control, fallback to contour center.
+        if hough_error is not None:
+            error = hough_error
+            detection_method = "HOUGH"
+        elif contour_error is not None:
+            error = contour_error
+            detection_method = "CONTOUR"
         
         # --- CORE BACKEND LOGIC ---
         pid_output, reasoning, p_term, d_term = logic.calculate_pid(error)
@@ -138,12 +207,14 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
              
         cv2.putText(display_frame, f"PID Output (Steering): {pid_output:.3f}", 
                    (20, 130), font, 0.6, (255, 255, 0), 2)
-        cv2.putText(display_frame, f"Detections: {len(contours)} blob(s)", 
+        cv2.putText(display_frame, f"Detections: {len(contours)} blob(s) | Hough Segments: {len(hough_lines)}", 
                    (20, 160), font, 0.5, (200, 200, 200), 1)
+        cv2.putText(display_frame, f"Method: {detection_method}",
+               (20, 182), font, 0.5, (200, 255, 200), 1)
         
         # Draw Reasoning Multi-line
         reasoning_lines = reasoning.split(" | ") if reasoning else ["No Data"]
-        y_offset = 190
+        y_offset = 208
         for line in reasoning_lines:
             color = (200, 200, 200) # Light Gray
             if line.startswith("->"):
@@ -180,20 +251,27 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
             mask_clean_3ch = cv2.cvtColor(mask_clean, cv2.COLOR_GRAY2BGR)
             cv2.putText(mask_clean_3ch, "Morpho Cleaned", (5, 25), font, 0.6, (255, 255, 255), 1)
             
+            # Hough stage preview
+            hough_3ch = cv2.cvtColor(canny_edges, cv2.COLOR_GRAY2BGR)
+            for x1, y1, x2, y2 in hough_lines:
+                cv2.line(hough_3ch, (x1, y1), (x2, y2), (255, 0, 255), 2)
+            cv2.putText(hough_3ch, "Hough Segments", (5, 25), font, 0.6, (255, 255, 255), 1)
+
             # Create horizontal tile of all stages
             h = roi.shape[0]
-            w = roi.shape[1] // 4
+            w = roi.shape[1] // 5
             
             # Resize all pipeline stages to quarter width
             gray_resized = cv2.resize(gray_3ch, (w, h))
             canny_resized = cv2.resize(canny_3ch, (w, h))
             mask_resized = cv2.resize(mask_3ch, (w, h))
             mask_clean_resized = cv2.resize(mask_clean_3ch, (w, h))
+            hough_resized = cv2.resize(hough_3ch, (w, h))
             
             # Horizontally stack
-            pipeline_stages = np.hstack([gray_resized, canny_resized, mask_resized, mask_clean_resized])
+            pipeline_stages = np.hstack([gray_resized, canny_resized, mask_resized, mask_clean_resized, hough_resized])
             
-            cv2.imshow("3_PIPELINE_STAGES - Gray | Canny | HSV Mask | Clean Mask", pipeline_stages)
+            cv2.imshow("3_PIPELINE_STAGES - Gray | Canny | HSV Mask | Clean Mask | Hough", pipeline_stages)
         
         # Playback control
         key = cv2.waitKey(playback_delay) & 0xFF
@@ -215,8 +293,8 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
         frame_count += 1
         
         if debug_mode and frame_count % 30 == 0:
-            print(f"[Frame {frame_count}] Error: {error if error else 'N/A':.1f} | " + 
-                  f"PID: {pid_output:.3f} | State: {state}")
+            err_msg = f"{error:.1f}" if error is not None else "N/A"
+            print(f"[Frame {frame_count}] Error: {err_msg} | PID: {pid_output:.3f} | State: {state} | Method: {detection_method}")
 
     cap.release()
     cv2.destroyAllWindows()

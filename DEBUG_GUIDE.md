@@ -32,11 +32,12 @@ python video_processor.py
    - Green circle at the computed center
    - Red error line from image center to detection
 
-3. **"3_PIPELINE_STAGES"** (if enabled) - Four-panel algorithm pipeline
+3. **"3_PIPELINE_STAGES"** (if enabled) - Five-panel algorithm pipeline
    - **Panel 1: Grayscale** - RGB to grayscale conversion
    - **Panel 2: Canny Edges** - Edge detection output (50-150 threshold)
    - **Panel 3: HSV Mask** - Black color detection in HSV space
    - **Panel 4: Clean Mask** - After morphological cleaning (open/close)
+  - **Panel 5: Hough Segments** - Line segments used for coordinate extraction
 
 #### Parameters in Code
 
@@ -69,11 +70,13 @@ Raw Frame
     ↓
 [STAGE 5] Morphological Operations (CLOSE + OPEN)
     ↓
-[STAGE 6] Contour Finding (find black line blobs)
+[STAGE 6] Hough Transform (line segments + left/right coordinate estimate)
     ↓
-[STAGE 7] Calculate Error = Midpoint - Image_Center
+[STAGE 7] Contour Finding (mask-based fallback)
     ↓
-[STAGE 8] PD Controller (P_term + D_term = Steering)
+[STAGE 8] Select Error (Hybrid: Hough first, contour fallback)
+  ↓
+[STAGE 9] PD Controller (P_term + D_term = Steering)
     ↓
 Output: Motor Command
 ```
@@ -190,6 +193,10 @@ thresh = debug_dict['thresh']          # Threshold mask
 thresh_clean = debug_dict['thresh_clean']  # Cleaned mask
 contours = debug_dict['contours']      # Found contours
 contour_count = debug_dict['contour_count']  # Number of blobs
+hough_lines = debug_dict['hough_lines']      # Hough line segments
+hough_error = debug_dict['hough_error']      # Hough-derived center error
+selected_error = debug_dict['selected_error']  # Error used by controller
+selected_method = debug_dict['selected_method']  # HOUGH or CONTOUR
 ```
 
 ---
@@ -422,10 +429,10 @@ For a complete demonstration of all features:
 
 | File | Changes |
 |------|---------|
-| `video_processor.py` | Added Canny edges, morphological ops, pipeline stages display, slow-motion support |
+| `video_processor.py` | Added Canny edges, morphological ops, Hough transform + coordinate extraction, pipeline stages display, slow-motion support |
 | `simulator.py` | Added slow-motion factor, red detection area display, enhanced dashboard, pause control |
-| `vision.py` | Added debug_mode, show_stages, intermediate data return, frame counting |
-| `main_pi.py` | Added debug output, statistics tracking, enhanced console logging |
+| `vision.py` | Added debug_mode, show_stages, Hough/contour/hybrid detection modes, intermediate data return, frame counting |
+| `main_pi.py` | Added debug output, statistics tracking, enhanced console logging, explicit hybrid detection mode |
 
 ### New Concepts
 

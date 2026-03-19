@@ -4,7 +4,7 @@ from picamera2 import Picamera2
 import time
 
 class LineFollowerVision:
-    def __init__(self, resolution=(640, 480), debug_mode=False, show_stages=False):
+    def __init__(self, resolution=(640, 480), debug_mode=False, show_stages=False, detection_mode="hybrid"):
         """
         Initialize line follower vision system.
         
@@ -12,10 +12,12 @@ class LineFollowerVision:
             resolution: Camera resolution (width, height)
             debug_mode: Print debug info to console
             show_stages: Save intermediate processing stages for analysis
+            detection_mode: "hybrid" (default), "hough", or "contour"
         """
         self.resolution = resolution
         self.debug_mode = debug_mode
         self.show_stages = show_stages
+        self.detection_mode = detection_mode.lower()
         self.picam2 = Picamera2()
         
         # Configure the camera
@@ -34,6 +36,53 @@ class LineFollowerVision:
             print(f"[Vision] Initialized with resolution {resolution}")
             print(f"[Vision] ROI: rows {self.roi_top} to {self.roi_bottom}")
             print(f"[Vision] Debug Mode: ON | Show Stages: {show_stages}")
+            print(f"[Vision] Detection Mode: {self.detection_mode}")
+
+    def _estimate_center_error_from_hough(self, canny_edges, img_center):
+        """Estimate lane-center error from Hough line segments in ROI coordinates."""
+        lines = cv2.HoughLinesP(
+            canny_edges,
+            rho=1,
+            theta=np.pi / 180,
+            threshold=40,
+            minLineLength=35,
+            maxLineGap=20,
+        )
+
+        hough_lines = []
+        left_x = []
+        right_x = []
+
+        if lines is None:
+            return None, hough_lines, None, None
+
+        for line in lines[:, 0]:
+            x1, y1, x2, y2 = map(int, line)
+            dx = x2 - x1
+            dy = y2 - y1
+
+            # Keep near-vertical line segments.
+            angle_deg = abs(np.degrees(np.arctan2(dy, dx)))
+            verticality = min(angle_deg, 180 - angle_deg)
+            if verticality < 55:
+                continue
+
+            x_mid = 0.5 * (x1 + x2)
+            hough_lines.append((x1, y1, x2, y2))
+
+            if x_mid < img_center:
+                left_x.append(x_mid)
+            else:
+                right_x.append(x_mid)
+
+        if not left_x or not right_x:
+            return None, hough_lines, None, None
+
+        left_mean = float(np.mean(left_x))
+        right_mean = float(np.mean(right_x))
+        lane_center = 0.5 * (left_mean + right_mean)
+        error = lane_center - img_center
+        return error, hough_lines, left_mean, right_mean
 
     def get_line_error(self, return_intermediate=False):
         """
@@ -70,13 +119,21 @@ class LineFollowerVision:
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         thresh_clean = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
         thresh_clean = cv2.morphologyEx(thresh_clean, cv2.MORPH_OPEN, kernel)
+
+        img_center = self.resolution[0] / 2
         
-        # ===== STAGE 6: Find contours =====
+        # ===== STAGE 6: Hough Transform on Canny edges =====
+        hough_error, hough_lines, left_line_x, right_line_x = self._estimate_center_error_from_hough(
+            canny,
+            img_center,
+        )
+
+        # ===== STAGE 7: Find contours =====
         contours, _ = cv2.findContours(thresh_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        img_center = self.resolution[0] / 2
+        contour_error = None
         error = None
-        best_contour = None
+        selected_method = "NONE"
         
         if len(contours) >= 2:
             # Sort contours by area to find the two most prominent lines
@@ -95,19 +152,42 @@ class LineFollowerVision:
                 
                 # Midpoint between the two lines
                 midpoint = (cx1 + cx2) / 2
-                error = midpoint - img_center
-                best_contour = [c1, c2]
+                contour_error = midpoint - img_center
                 
                 if self.debug_mode and self.frame_count % 30 == 0:
-                    print(f"[Frame {self.frame_count}] Two-line detection: centers at {cx1}, {cx2} | midpoint: {midpoint:.1f} | error: {error:.2f}")
+                    print(f"[Frame {self.frame_count}] Contour centers: {cx1}, {cx2} | midpoint: {midpoint:.1f} | contour_error: {contour_error:.2f}")
         
         elif len(contours) == 1:
             # SAFETY: Only 1 border line is visible
             if self.debug_mode and self.frame_count % 30 == 0:
                 print(f"[Frame {self.frame_count}] WARNING: Only 1 contour detected (ambiguous)")
                 
+        if self.detection_mode == "hough":
+            error = hough_error
+            selected_method = "HOUGH" if hough_error is not None else "NONE"
+        elif self.detection_mode == "contour":
+            error = contour_error
+            selected_method = "CONTOUR" if contour_error is not None else "NONE"
+        else:
+            # Hybrid mode: prefer Hough coordinate estimate, fallback to contour midpoint.
+            if hough_error is not None:
+                error = hough_error
+                selected_method = "HOUGH"
+            elif contour_error is not None:
+                error = contour_error
+                selected_method = "CONTOUR"
+
         if error is None and self.debug_mode and self.frame_count % 30 == 0:
             print(f"[Frame {self.frame_count}] ERROR: Lines Lost!")
+
+        if self.debug_mode and self.frame_count % 30 == 0:
+            hough_msg = f"{hough_error:.2f}" if hough_error is not None else "N/A"
+            contour_msg = f"{contour_error:.2f}" if contour_error is not None else "N/A"
+            selected_msg = f"{error:.2f}" if error is not None else "N/A"
+            print(
+                f"[Frame {self.frame_count}] HoughErr={hough_msg} | ContourErr={contour_msg} | "
+                f"Selected={selected_msg} ({selected_method})"
+            )
         
         self.frame_count += 1
         
@@ -121,7 +201,15 @@ class LineFollowerVision:
                 'thresh_clean': thresh_clean,
                 'contours': contours,
                 'roi': roi,
-                'contour_count': len(contours)
+                'contour_count': len(contours),
+                'hough_lines': hough_lines,
+                'hough_line_count': len(hough_lines),
+                'hough_error': hough_error,
+                'contour_error': contour_error,
+                'selected_error': error,
+                'selected_method': selected_method,
+                'left_line_x': left_line_x,
+                'right_line_x': right_line_x,
             }
             return error, debug_dict
         
