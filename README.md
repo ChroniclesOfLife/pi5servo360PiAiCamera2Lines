@@ -55,17 +55,43 @@ This project uses a unified backend logic that drives a virtual simulator, an of
 
 ## How to Run
 
-### 1. Run the Simulator (Virtual Testing)
+### 1. Run the Simulator (Virtual Testing) - WITH SLOW-MOTION DEBUGGING
 ```bash
 python simulator.py
 ```
-This opens a 2D Pygame window where a virtual car follows a track using the core PD logic. Useful for tuning `Kp` and `Kd` safely.
+This opens a 2D Pygame window where a virtual car follows a track using the core PD logic.
 
-### 2. Run Video Analyzer (Offline Video)
+**Features:**
+- **2× Slow-Motion** enabled by default for detailed observation
+- **Red detection areas** show where lines are found
+- **Real-time PID dashboard** with algorithm reasoning
+- **Pause Control (P key)** to stop and analyze specific moments
+- Edit line 148 in simulator.py to change slow-motion factor:
+  ```python
+  main(slow_motion_factor=2)  # 1=realtime, 2=half-speed, 3=third-speed, etc.
+  ```
+
+### 2. Run Video Analyzer (Offline Video) - COMPLETE PIPELINE VISUALIZATION
 ```bash
 python video_processor.py
 ```
-Reads `test_run.mp4`, processes the lines via OpenCV HSV, applies PD logic, and overlays the PID output and State on the video frames.
+Reads `test_run.mp4`, processes through complete algorithm pipeline with visualization.
+
+**Features:**
+- **Three synchronized display windows:**
+  1. Main frame with PID logic overlay
+  2. ROI detail with red detection areas and green center point
+  3. **Algorithm pipeline stages** (Grayscale → Canny → HSV Mask → Clean Mask)
+- **Slow-motion playback** (2× default, configurable)
+- **Pause on P key**, resume with SPACE, quit with Q
+- Edit line 194 in video_processor.py to customize:
+  ```python
+  process_video(
+      debug_mode=True,              # Console debug info
+      slow_motion_factor=2,         # Playback speed control
+      show_pipeline=True            # Algorithm stages display
+  )
+  ```
 
 ### 3. Run on Physical Robot (Raspberry Pi 5)
 ```bash
@@ -73,5 +99,49 @@ python main_pi.py
 ```
 Combines `Picamera2` live feed, MG996R servo control, and the shared `RobotLogic` to drive the physical robot.
 
-## License
-MIT
+**Enhanced Output:**
+- Frame-by-frame status logging
+- Line detection statistics (loss events, success rate)
+- Comprehensive execution summary on shutdown
+
+---
+
+## 🔧 Debugging & Visualization Guide
+
+For detailed debugging, see [DEBUG_GUIDE.md](DEBUG_GUIDE.md):
+- Complete algorithm pipeline explanation
+- Troubleshooting common issues
+- Performance tuning tips
+- Log file analysis
+- **Understanding each processing stage with visual examples**
+
+For comprehensive verification, see [VERIFICATION.md](VERIFICATION.md):
+- Feature checklist for all components
+- Digital twin architecture explanation
+- Input/output specification verification
+- Testing procedures (desktop and Pi)
+
+---
+
+## Algorithm Overview
+
+The system uses a **Proportional-Derivative (PD) Controller** with two-line detection:
+
+```
+1. Detect two black lines (left and right borders)
+2. Calculate midpoint between them
+3. Calculate error = midpoint - image_center
+4. Apply PD: output = Kp×error + Kd×(d_error/dt)
+5. Command: left_motor = base_speed + output
+            right_motor = -(base_speed - output)
+```
+
+**Slow-Motion Visualization Benefits:**
+- Watch PD corrections in real-time
+- See oscillation behavior clearly
+- Understand error accumulation
+- Tune Kp and Kd with confidence
+
+---
+
+

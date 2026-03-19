@@ -2,9 +2,15 @@ import cv2
 import numpy as np
 from robot_logic import RobotLogic
 
-def process_video(video_path="test_run.mp4"):
+def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor=2, show_pipeline=True):
     """
     Offline video processing using the shared RobotLogic.
+    
+    Args:
+        video_path (str): Path to input video file
+        debug_mode (bool): Enable detailed debug output
+        slow_motion_factor (int): Multiply frame delay (higher = slower playback)
+        show_pipeline (bool): Show algorithm pipeline stages (Canny, masks, etc.)
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -17,6 +23,14 @@ def process_video(video_path="test_run.mp4"):
     # Define ROI (Region Of Interest)
     roi_top_ratio = 0.5
     roi_bottom_ratio = 0.9
+    
+    # Playback delay (ms) - increased for slow motion
+    base_delay = 50  # ~20fps base
+    playback_delay = base_delay * slow_motion_factor
+    
+    print(f"[DEBUG] Starting video processor with {slow_motion_factor}x slow motion")
+    print(f"[DEBUG] Pipeline visualization: {'ENABLED' if show_pipeline else 'DISABLED'}")
+    print(f"[DEBUG] Playback delay: {playback_delay}ms")
 
     while True:
         ret, frame = cap.read()
@@ -32,9 +46,21 @@ def process_video(video_path="test_run.mp4"):
         # Crop to ROI
         roi_top = int(height * roi_top_ratio)
         roi_bottom = int(height * roi_bottom_ratio)
-        roi = frame[roi_top:roi_bottom, 0:width]
+        roi = frame[roi_top:roi_bottom, 0:width].copy()
         
-        # Convert to HSV to find the black line
+        # Create a copy for processing pipeline visualization
+        pipeline_frame = roi.copy()
+        
+        # ==== STAGE 1: RGB to Grayscale ====
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        
+        # ==== STAGE 2: Gaussian Blur ====
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # ==== STAGE 3: Canny Edge Detection ====
+        canny_edges = cv2.Canny(blur, 50, 150)
+        
+        # ==== STAGE 4: Convert to HSV to find the black line ====
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         
         # Define range for black color (tune these based on your lighting)
@@ -43,11 +69,17 @@ def process_video(video_path="test_run.mp4"):
         
         mask = cv2.inRange(hsv, lower_black, upper_black)
         
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # ==== STAGE 5: Morphological operations to clean mask ====
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        mask_clean = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_OPEN, kernel)
+        
+        # ==== STAGE 6: Find contours ====
+        contours, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         img_center = width / 2
         error = None
+        detected_centers = []  # Store detected line centers for visualization
         
         if len(contours) > 0:
             # Sort by area, find largest line blob
@@ -57,62 +89,139 @@ def process_video(video_path="test_run.mp4"):
             if M["m00"] > 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
+                detected_centers.append((cx, cy))
                 
                 # Calculate Error (Pixel distance from center)
                 error = cx - img_center
                 
-                # Draw center of detected line
-                cv2.circle(roi, (cx, cy), 10, (0, 255, 0), -1)
-                cv2.line(roi, (int(img_center), cy), (cx, cy), (0, 0, 255), 2)
+                # Draw center of detected line on ROI
+                cv2.circle(roi, (cx, cy), 12, (0, 255, 0), -1)  # Green circle at detection
+                cv2.circle(roi, (cx, cy), 12, (0, 200, 0), 2)   # Green outline
+                
+                # Draw error line (red line from center to detected point)
+                cv2.line(roi, (int(img_center), cy), (cx, cy), (0, 0, 255), 3)
+                
+                # Draw detection radius in red semi-transparent
+                roi_overlay = roi.copy()
+                cv2.drawContours(roi_overlay, [c], 0, (0, 0, 255), 3)  # Red contour
+                cv2.addWeighted(roi_overlay, 0.4, roi, 0.6, 0, roi)
         
         # --- CORE BACKEND LOGIC ---
         pid_output, reasoning, p_term, d_term = logic.calculate_pid(error)
         state = logic.update_state(horizontal_line_detected=False, trigger_zone_reached=False)
         logic.log_data(frame_count, error, p_term, d_term, pid_output, reasoning)
         
-        # --- OVERLAY RENDERING ---
-        # Draw Dashboard on Frame
-        overlay = frame.copy()
+        # --- RENDER MAIN FRAME WITH DASHBOARD OVERLAY ---
+        display_frame = frame.copy()
+        overlay = display_frame.copy()
         
-        # Make the dashboard background taller to fit reasoning
-        dashboard_height = 250
-        cv2.rectangle(overlay, (10, 10), (500, dashboard_height), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame) # Transparency
+        # Draw semi-transparent dashboard background
+        dashboard_height = 280
+        cv2.rectangle(overlay, (10, 10), (560, dashboard_height), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.7, display_frame, 0.3, 0, display_frame)
         
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(frame, f"Frame: {frame_count} | State: {state}", (20, 40), font, 0.6, (255, 255, 255), 2)
+        
+        # ---- Dashboard Content ----
+        cv2.putText(display_frame, f"Frame: {frame_count} | State: {state}", 
+                   (20, 40), font, 0.7, (255, 255, 255), 2)
+        
+        cv2.putText(display_frame, f"ROI: [{roi_top}-{roi_bottom}]", 
+                   (20, 70), font, 0.5, (200, 200, 200), 1)
         
         if error is not None:
-             cv2.putText(frame, f"Error: {error:.1f} | P: {p_term:.2f} | D: {d_term:.2f}", (20, 70), font, 0.6, (0, 255, 255), 2)
+             cv2.putText(display_frame, f"Error: {error:.1f}px | P: {p_term:.3f} | D: {d_term:.3f}", 
+                        (20, 100), font, 0.6, (0, 255, 255), 2)
         else:
-             cv2.putText(frame, f"Error: Line Lost", (20, 70), font, 0.6, (0, 0, 255), 2)
+             cv2.putText(display_frame, f"Error: LINE LOST", 
+                        (20, 100), font, 0.6, (0, 0, 255), 2)
              
-        cv2.putText(frame, f"Total PID Output: {pid_output:.2f}", (20, 100), font, 0.6, (255, 255, 0), 2)
+        cv2.putText(display_frame, f"PID Output (Steering): {pid_output:.3f}", 
+                   (20, 130), font, 0.6, (255, 255, 0), 2)
+        cv2.putText(display_frame, f"Detections: {len(contours)} blob(s)", 
+                   (20, 160), font, 0.5, (200, 200, 200), 1)
         
         # Draw Reasoning Multi-line
         reasoning_lines = reasoning.split(" | ") if reasoning else ["No Data"]
-        y_offset = 140
+        y_offset = 190
         for line in reasoning_lines:
             color = (200, 200, 200) # Light Gray
             if line.startswith("->"):
-                color = (0, 255, 255) # Yellow for decisions
-            cv2.putText(frame, line, (20, y_offset), font, 0.5, color, 1)
-            y_offset += 25
+                color = (0, 255, 255) # Cyan for decisions
+            cv2.putText(display_frame, line, (20, y_offset), font, 0.45, color, 1)
+            y_offset += 22
             
-        # Show ROI box on full frame
-        cv2.rectangle(frame, (0, roi_top), (width, roi_bottom), (255, 0, 0), 2)
+        # Highlight ROI box on full frame (cyan rectangle)
+        cv2.rectangle(display_frame, (0, roi_top), (width, roi_bottom), (255, 255, 0), 3)
         
-        cv2.imshow("Video Analyzer - Digital Twin", frame)
-        cv2.imshow("Mask Filter", mask)
+        # Show main visualization
+        cv2.imshow("1_VIDEO_ANALYZER - Main Frame (PID Logic)", display_frame)
         
-        # Delay for playback speed (e.g. 30ms for ~30fps). Press 'q' to quit.
-        if cv2.waitKey(30) & 0xFF == ord('q'):
+        # Show ROI with detections
+        cv2.imshow("2_ROI_WITH_DETECTIONS - Red=Detection Area, Green=Center", roi)
+        
+        # --- PIPELINE VISUALIZATION (if enabled) ---
+        if show_pipeline:
+            # Create pipeline grid showing processing stages
+            
+            # Grayscale stage
+            gray_3ch = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            cv2.putText(gray_3ch, "Grayscale", (5, 25), font, 0.6, (255, 255, 255), 1)
+            
+            # Canny stage
+            canny_3ch = cv2.cvtColor(canny_edges, cv2.COLOR_GRAY2BGR)
+            cv2.putText(canny_3ch, "Canny Edges (50-150)", (5, 25), font, 0.6, (255, 255, 255), 1)
+            
+            # HSV mask stage
+            mask_3ch = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            cv2.putText(mask_3ch, "Black HSV Mask", (5, 25), font, 0.6, (255, 255, 255), 1)
+            
+            # Clean mask stage
+            mask_clean_3ch = cv2.cvtColor(mask_clean, cv2.COLOR_GRAY2BGR)
+            cv2.putText(mask_clean_3ch, "Morpho Cleaned", (5, 25), font, 0.6, (255, 255, 255), 1)
+            
+            # Create horizontal tile of all stages
+            h = roi.shape[0]
+            w = roi.shape[1] // 4
+            
+            # Resize all pipeline stages to quarter width
+            gray_resized = cv2.resize(gray_3ch, (w, h))
+            canny_resized = cv2.resize(canny_3ch, (w, h))
+            mask_resized = cv2.resize(mask_3ch, (w, h))
+            mask_clean_resized = cv2.resize(mask_clean_3ch, (w, h))
+            
+            # Horizontally stack
+            pipeline_stages = np.hstack([gray_resized, canny_resized, mask_resized, mask_clean_resized])
+            
+            cv2.imshow("3_PIPELINE_STAGES - Gray | Canny | HSV Mask | Clean Mask", pipeline_stages)
+        
+        # Playback control
+        key = cv2.waitKey(playback_delay) & 0xFF
+        if key == ord('q'):
+            print(f"[DEBUG] User quit at frame {frame_count}")
             break
+        if key == ord('p'):
+            print(f"[DEBUG] Paused at frame {frame_count}. Press SPACE to continue or Q to quit...")
+            while True:
+                k = cv2.waitKey(0) & 0xFF
+                if k == ord(' '):
+                    break
+                if k == ord('q'):
+                    key = ord('q')
+                    break
+            if key == ord('q'):
+                break
             
         frame_count += 1
+        
+        if debug_mode and frame_count % 30 == 0:
+            print(f"[Frame {frame_count}] Error: {error if error else 'N/A':.1f} | " + 
+                  f"PID: {pid_output:.3f} | State: {state}")
 
     cap.release()
     cv2.destroyAllWindows()
+    print(f"[DEBUG] Processing complete. Processed {frame_count} frames.")
 
 if __name__ == "__main__":
-    process_video()
+    # video_processor with 2x slow motion and pipeline visualization
+    process_video(debug_mode=True, slow_motion_factor=2, show_pipeline=True)
