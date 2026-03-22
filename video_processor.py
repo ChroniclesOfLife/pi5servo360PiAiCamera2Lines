@@ -49,7 +49,7 @@ def estimate_center_error_from_hough(canny_edges, img_center, min_line_length=35
     error = lane_center - img_center
     return error, hough_lines, left_mean, right_mean
 
-def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor=2, show_pipeline=True):
+def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor=8, show_pipeline=True):
     """
     Offline video processing using the shared RobotLogic.
     
@@ -57,7 +57,7 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
         video_path (str): Path to input video file
         debug_mode (bool): Enable detailed debug output
         slow_motion_factor (int): Multiply frame delay (higher = slower playback)
-        show_pipeline (bool): Show algorithm pipeline stages (Canny, masks, etc.)
+        show_pipeline (bool): Show algorithm pipeline stages (Gray, Blur, Canny, Hough)
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -71,8 +71,8 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
     roi_top_ratio = 0.5
     roi_bottom_ratio = 0.9
     
-    # Playback delay (ms) - increased for slow motion
-    base_delay = 50  # ~20fps base
+    # Playback delay (ms) - intentionally slow for presentation and debugging
+    base_delay = 70
     playback_delay = base_delay * slow_motion_factor
     
     print(f"[DEBUG] Starting video processor with {slow_motion_factor}x slow motion")
@@ -104,76 +104,25 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
         # ==== STAGE 3: Canny Edge Detection ====
         canny_edges = cv2.Canny(blur, 50, 150)
         
-        # ==== STAGE 4: Convert to HSV to find the black line ====
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        
-        # Define range for black color (tune these based on your lighting)
-        lower_black = np.array([0, 0, 0])
-        upper_black = np.array([180, 255, 50])
-        
-        mask = cv2.inRange(hsv, lower_black, upper_black)
-        
-        # ==== STAGE 5: Morphological operations to clean mask ====
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        mask_clean = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_OPEN, kernel)
-        
-        # ==== STAGE 6: Hough Transform on Canny edges ====
+        # ==== STAGE 4: Hough Transform on Canny edges ====
         img_center = width / 2
-        hough_error, hough_lines, left_line_x, right_line_x = estimate_center_error_from_hough(
+        error, hough_lines, left_line_x, right_line_x = estimate_center_error_from_hough(
             canny_edges,
             img_center,
         )
-
-        # ==== STAGE 7: Find contours ====
-        contours, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        contour_error = None
-        error = None
-        detection_method = "NONE"
-        
-        if len(contours) > 0:
-            # Sort by area, find largest line blob
-            c = max(contours, key=cv2.contourArea)
-            M = cv2.moments(c)
-            
-            if M["m00"] > 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                
-                # Calculate contour-based error (pixel distance from center)
-                contour_error = cx - img_center
-                
-                # Draw center of detected line on ROI
-                cv2.circle(roi, (cx, cy), 12, (0, 255, 0), -1)  # Green circle at detection
-                cv2.circle(roi, (cx, cy), 12, (0, 200, 0), 2)   # Green outline
-                
-                # Draw error line (red line from center to detected point)
-                cv2.line(roi, (int(img_center), cy), (cx, cy), (0, 0, 255), 3)
-                
-                # Draw detection radius in red semi-transparent
-                roi_overlay = roi.copy()
-                cv2.drawContours(roi_overlay, [c], 0, (0, 0, 255), 3)  # Red contour
-                cv2.addWeighted(roi_overlay, 0.4, roi, 0.6, 0, roi)
 
         # Draw Hough segments and coordinate guide lines.
         for x1, y1, x2, y2 in hough_lines:
             cv2.line(roi, (x1, y1), (x2, y2), (255, 0, 255), 2)
 
+        detection_method = "NONE"
         if left_line_x is not None and right_line_x is not None:
             lane_mid_x = int((left_line_x + right_line_x) / 2)
             cv2.line(roi, (int(left_line_x), 0), (int(left_line_x), roi.shape[0] - 1), (255, 200, 0), 1)
             cv2.line(roi, (int(right_line_x), 0), (int(right_line_x), roi.shape[0] - 1), (255, 200, 0), 1)
             cv2.line(roi, (lane_mid_x, 0), (lane_mid_x, roi.shape[0] - 1), (0, 255, 255), 2)
             cv2.circle(roi, (lane_mid_x, roi.shape[0] // 2), 8, (0, 255, 255), -1)
-
-        # Prefer Hough-coordinate error for control, fallback to contour center.
-        if hough_error is not None:
-            error = hough_error
             detection_method = "HOUGH"
-        elif contour_error is not None:
-            error = contour_error
-            detection_method = "CONTOUR"
         
         # --- CORE BACKEND LOGIC ---
         pid_output, reasoning, p_term, d_term = logic.calculate_pid(error)
@@ -207,7 +156,7 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
              
         cv2.putText(display_frame, f"PID Output (Steering): {pid_output:.3f}", 
                    (20, 130), font, 0.6, (255, 255, 0), 2)
-        cv2.putText(display_frame, f"Detections: {len(contours)} blob(s) | Hough Segments: {len(hough_lines)}", 
+        cv2.putText(display_frame, f"Hough Segments: {len(hough_lines)}", 
                    (20, 160), font, 0.5, (200, 200, 200), 1)
         cv2.putText(display_frame, f"Method: {detection_method}",
                (20, 182), font, 0.5, (200, 255, 200), 1)
@@ -243,13 +192,9 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
             canny_3ch = cv2.cvtColor(canny_edges, cv2.COLOR_GRAY2BGR)
             cv2.putText(canny_3ch, "Canny Edges (50-150)", (5, 25), font, 0.6, (255, 255, 255), 1)
             
-            # HSV mask stage
-            mask_3ch = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            cv2.putText(mask_3ch, "Black HSV Mask", (5, 25), font, 0.6, (255, 255, 255), 1)
-            
-            # Clean mask stage
-            mask_clean_3ch = cv2.cvtColor(mask_clean, cv2.COLOR_GRAY2BGR)
-            cv2.putText(mask_clean_3ch, "Morpho Cleaned", (5, 25), font, 0.6, (255, 255, 255), 1)
+            # Blur stage
+            blur_3ch = cv2.cvtColor(blur, cv2.COLOR_GRAY2BGR)
+            cv2.putText(blur_3ch, "Gaussian Blur", (5, 25), font, 0.6, (255, 255, 255), 1)
             
             # Hough stage preview
             hough_3ch = cv2.cvtColor(canny_edges, cv2.COLOR_GRAY2BGR)
@@ -259,19 +204,18 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
 
             # Create horizontal tile of all stages
             h = roi.shape[0]
-            w = roi.shape[1] // 5
+            w = roi.shape[1] // 4
             
             # Resize all pipeline stages to quarter width
             gray_resized = cv2.resize(gray_3ch, (w, h))
+            blur_resized = cv2.resize(blur_3ch, (w, h))
             canny_resized = cv2.resize(canny_3ch, (w, h))
-            mask_resized = cv2.resize(mask_3ch, (w, h))
-            mask_clean_resized = cv2.resize(mask_clean_3ch, (w, h))
             hough_resized = cv2.resize(hough_3ch, (w, h))
             
             # Horizontally stack
-            pipeline_stages = np.hstack([gray_resized, canny_resized, mask_resized, mask_clean_resized, hough_resized])
+            pipeline_stages = np.hstack([gray_resized, blur_resized, canny_resized, hough_resized])
             
-            cv2.imshow("3_PIPELINE_STAGES - Gray | Canny | HSV Mask | Clean Mask | Hough", pipeline_stages)
+            cv2.imshow("3_PIPELINE_STAGES - Gray | Blur | Canny | Hough", pipeline_stages)
         
         # Playback control
         key = cv2.waitKey(playback_delay) & 0xFF
@@ -301,5 +245,5 @@ def process_video(video_path="test_run.mp4", debug_mode=True, slow_motion_factor
     print(f"[DEBUG] Processing complete. Processed {frame_count} frames.")
 
 if __name__ == "__main__":
-    # video_processor with 2x slow motion and pipeline visualization
-    process_video(debug_mode=True, slow_motion_factor=2, show_pipeline=True)
+    # Very slow playback for debugging and presentation
+    process_video(debug_mode=True, slow_motion_factor=8, show_pipeline=True)

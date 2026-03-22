@@ -238,7 +238,7 @@ def main(slow_motion_factor=1, debug_verbose=True):
                 color = GREEN
             elif text.startswith("="):
                 color = CYAN
-            elif "QUYẾT ĐỊNH" in text or "->" in text:
+            elif "DECISION" in text or "->" in text:
                 color = YELLOW
                 
             text_surface = font.render(text, True, color) if not text.startswith("===") else font.render(text, True, color)

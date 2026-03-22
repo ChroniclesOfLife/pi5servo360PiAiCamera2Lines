@@ -17,7 +17,6 @@ def main(debug_mode=True, verbose_period=10):
         resolution=(640, 480),
         debug_mode=debug_mode,
         show_stages=False,
-        detection_mode="hybrid",
     )
     
     # Initialize Shared Logic Brain

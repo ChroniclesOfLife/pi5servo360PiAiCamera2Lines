@@ -41,33 +41,33 @@ class RobotLogic:
         reasoning = []
         
         # 1. Analyze Proportional (Position) Error
-        # Convention: Error > 0 means Line is on the RIGHT
-        if error > 20: 
-            reasoning.append("Cảm biến thấy line ở PHẢI xe (Error dương).")
+        # Convention: Error > 0 means lane center is on the RIGHT
+        if error > 20:
+            reasoning.append("Lane center detected to the RIGHT of robot center (positive error).")
         elif error < -20:
-            reasoning.append("Cảm biến thấy line ở TRÁI xe (Error âm).")
+            reasoning.append("Lane center detected to the LEFT of robot center (negative error).")
         else:
-            reasoning.append("Xe đang ĐI THẢNG giữa line.")
+            reasoning.append("Robot is approximately centered in the lane.")
             
         # 2. Analyze Derivative (Momentum/Trend) Error
         if abs(derivative) > 10:
             if derivative * error > 0:
-                 reasoning.append(f"Xe đang LỆCH NHANH HƠN (D={derivative:.1f}), cần phanh gấp.")
+                reasoning.append(f"Deviation is increasing quickly (D={derivative:.1f}); strong correction required.")
             else:
-                 reasoning.append(f"Xe đang TRỞ LẠI TÂM (D={derivative:.1f}), giảm góc lái để chống lắc.")
+                reasoning.append(f"Robot is returning toward center (D={derivative:.1f}); soften correction to reduce oscillation.")
                  
         # 3. Final Action Decision
         # Convention: Output > 0 means TURN RIGHT
         if output > 0.5:
-            reasoning.append("-> QUYẾT ĐỊNH: Rẽ Phải Mạnh.")
+            reasoning.append("-> DECISION: Turn RIGHT aggressively.")
         elif output < -0.5:
-            reasoning.append("-> QUYẾT ĐỊNH: Rẽ Trái Mạnh.")
+            reasoning.append("-> DECISION: Turn LEFT aggressively.")
         elif output > 0.1:
-            reasoning.append("-> QUYẾT ĐỊNH: Rẽ Phải Nhẹ.")
+            reasoning.append("-> DECISION: Turn RIGHT gently.")
         elif output < -0.1:
-            reasoning.append("-> QUYẾT ĐỊNH: Rẽ Trái Nhẹ.")
+            reasoning.append("-> DECISION: Turn LEFT gently.")
         else:
-            reasoning.append("-> QUYẾT ĐỊNH: Giữ Thẳng Lái.")
+            reasoning.append("-> DECISION: Keep steering centered.")
 
         final_reasoning = " | ".join(reasoning)
         
