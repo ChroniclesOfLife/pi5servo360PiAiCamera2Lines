@@ -1,192 +1,172 @@
-# Pi5 Servo + AI Camera Line Follower
+# Pi5 Servo 360 + AI Camera 2-Line Robot
 
-This project is a line-following robot system for Raspberry Pi 5 with MG996R 360 servos and Pi Camera (Picamera2).
+Production and demo repository for a Raspberry Pi 5 line-following robot using MG996R continuous servos and a downward-facing camera.
 
-It now uses one strict perception/control stack across the project:
-- Gaussian Blur
-- Canny Edge Detection (with hysteresis thresholds)
-- Hough Transform (line segments + lane center coordinates)
-- PID (PD form in code: P + D)
+## Owner And Algorithm Attribution
 
-No contour, HSV mask, threshold segmentation, or morphology are used in the active vision pipeline.
+This statement is included exactly as requested for presentation context:
 
-## Why This Design
-The goal is robust and explainable lane-center estimation for a top-down track view (black lane boundaries on a light floor), while keeping the algorithm simple enough to present clearly.
+- I understand all math.
+- I understand the Pygame structure, but I did not implement that part myself.
+- I understand all PID robot logic and related systems.
+- The main algorithm idea is by me.
 
-The pipeline is:
-1. Convert ROI to grayscale
-2. Apply Gaussian blur to reduce sensor noise
-3. Run Canny edge detection (low/high hysteresis thresholds)
-4. Run probabilistic Hough transform to extract line segments
-5. Split Hough segments into left/right lane groups
-6. Compute lane center from left/right x-coordinate means
-7. Compute steering error: lane_center - image_center
-8. PID logic computes steering correction
-9. Motor mapping applies correction to left/right servos
+## Active Algorithm Stack (Current Version)
 
-## Project Structure
-- `main_pi.py`
-  - Production runtime for Raspberry Pi 5 hardware.
-  - Reads error from `LineFollowerVision` and sends PID command to motors.
-- `main.py`
-  - Simplified hardware runtime that also uses shared PID logic.
-- `vision.py`
-  - Camera perception module (Gaussian + Canny + Hough only).
-  - Returns lane center error in pixels.
-- `video_processor.py`
-  - Offline analyzer for recorded video.
-  - Very slow playback by default for presentations.
-  - Multi-window debug output for each processing stage.
-- `robot_logic.py`
-  - Shared PID/PD and state machine logic.
-  - English debug reasoning and CSV logging.
-- `motor_control.py`
-  - MG996R servo abstraction via gpiozero/lgpio.
-- `simulator.py`
-  - Digital twin simulator using shared PID logic for behavior tuning.
-- `requirements.txt`, `environment.yml`
-  - Environment/dependency setup.
+The active pipeline is strict and consistent across runtime/debug modules:
 
-## Data Flow
-Camera frame -> ROI crop -> Gray -> Gaussian -> Canny -> Hough -> lane center coordinates -> error -> PID -> motor speeds.
+1. ROI crop
+2. Grayscale conversion
+3. Gaussian blur
+4. Canny edge detection (hysteresis thresholds)
+5. Probabilistic Hough transform
+6. Lane center coordinate estimation from left/right line groups
+7. PID steering control (PD form currently used: P + D)
 
-## Core Math
-Let:
-- $e_t$: lane center error in pixels at frame $t$
-- $K_p, K_d$: gains
+Not used in active path: HSV masking, threshold segmentation, contour tracking, morphology.
 
-Controller:
-$$
-P_t = K_p \cdot e_t
-$$
-$$
-D_t = K_d \cdot (e_t - e_{t-1})
-$$
-$$
-u_t = P_t + D_t
-$$
+## Repository Structure (GitHub Presentable)
 
-Where $u_t$ is the steering correction.
+```text
+pi5servo360PiAiCamera2Lines/
+|- README.md
+|- LICENSE
+|- requirements.txt
+|- environment.yml
+|- main_pi.py
+|- main.py
+|- vision.py
+|- video_processor.py
+|- robot_logic.py
+|- motor_control.py
+|- simulator.py
+|- robot_brain.py
+|- test_robot_brain_acceptance.py
+|- test_run.mp4
+|- docs/
+|  |- QUICK_START.md
+|  |- DEBUG_GUIDE.md
+|  |- VERIFICATION.md
+|  |- CHANGES_SUMMARY.md
+|  |- FILE_CHANGES.md
+|  |- CODE_REVIEW.md
+|  `- COMPLETION_SUMMARY.txt
+`- versions/
+   |- README.md
+   |- v1_legacy_f7da005/
+   |  |- README.md
+   |  |- main_pi.py
+   |  |- vision.py
+   |  |- video_processor.py
+   |  |- robot_logic.py
+   |  `- simulator.py
+   `- v2_current/
+      `- README.md
+```
 
-Motor mapping (tank style with one side inverted by mounting):
+## Versioning
+
+- Current active implementation: repository root source files + `versions/v2_current/`.
+- Earlier archived snapshot: `versions/v1_legacy_f7da005/` (from commit `f7da005`).
+
+This gives a clean old-vs-new narrative for management and technical review.
+
+## Core Math (Quick Presentation Format)
+
+Given lane-center error in pixels at frame $t$:
+
+- $e_t = x_{lane,t} - x_{image-center}$
+- $P_t = K_p \cdot e_t$
+- $D_t = K_d \cdot (e_t - e_{t-1})$
+- $u_t = P_t + D_t$
+
+Motor mapping:
+
 - `left_speed = BASE_SPEED + clamp(u_t)`
 - `right_speed = -(BASE_SPEED - clamp(u_t))`
 
-## Runtime Files and Purpose
-### 1) Physical Robot
-Run:
+## ROI And Zone Logic (High Level)
+
+- ROI is configured to the lower section of the frame where lane lines are closest and most stable.
+- Hough segments are split into left/right groups using x-midpoints.
+- Lane center is the average of left/right group means.
+- Steering error is lane-center minus image-center.
+
+State transition support exists in `robot_logic.py` (`FOLLOWING` and `TURNING_90`) and can be driven by trigger booleans from perception.
+
+## How To Run
+
+### 1) Physical Robot Runtime
+
 ```bash
 python main_pi.py
 ```
-What it does:
-- Initializes GPIO servos and camera
-- Computes error from Hough lane center
-- Runs PID each frame
-- Logs detailed telemetry
 
-### 2) Offline Video Debug (Recommended for demos)
-Run:
+### 2) Offline Debug + Presentation (Very Slow Playback)
+
 ```bash
 python video_processor.py
 ```
-What it does:
-- Opens a video file (`test_run.mp4` by default)
-- Uses strict Gray->Blur->Canny->Hough->PID path
-- Shows:
-  - Main dashboard window
-  - ROI overlay window with Hough lines and lane center markers
-  - Stage window (`Gray | Blur | Canny | Hough`)
 
-Default playback is intentionally very slow for explanation to management.
+Windows shown:
+
+- Main dashboard with PID + state
+- ROI overlay with Hough lines and lane center
+- Pipeline view: Gray | Blur | Canny | Hough
 
 Controls:
-- `q`: quit
-- `p`: pause
-- `space`: resume after pause
+
+- `q` quit
+- `p` pause
+- `space` resume
 
 ### 3) Simulator
-Run:
+
 ```bash
 python simulator.py
 ```
-Uses the same shared PID logic for behavior and tuning.
 
-## Key Configuration Points
-### `vision.py`
-- ROI location: bottom area of frame (`roi_top`, `roi_bottom`)
-- Canny thresholds: `50`, `150`
-- Hough params: `threshold`, `minLineLength`, `maxLineGap`
-- Vertical filtering: rejects low-angle segments
+## Documentation Map
 
-### `video_processor.py`
-- Slowdown: `slow_motion_factor` (default set high for presentation)
-- Base delay: `base_delay`
-- Debug print cadence: every 30 frames
-
-### `robot_logic.py`
-- Gains: `kp`, `kd`
-- State machine: `FOLLOWING`, `TURNING_90`
-- CSV logs for post-run analysis
-
-## Logs
-CSV log files include:
-- Frame index
-- Timestamp
-- State
-- Error
-- P term
-- D term
-- Total output
-- Human-readable reasoning
-
-## English Debug Reasoning
-All decision text is now in English, for professional reporting and presentation.
-
-Examples:
-- `Lane center detected to the RIGHT of robot center (positive error).`
-- `-> DECISION: Turn LEFT gently.`
+- Quick start: `docs/QUICK_START.md`
+- Debug details: `docs/DEBUG_GUIDE.md`
+- Verification checklist: `docs/VERIFICATION.md`
+- Changes and review artifacts: `docs/`
 
 ## Setup
-### Conda (recommended)
+
+### Conda
+
 ```bash
 mamba env create -f environment.yml
 mamba activate Pi5ServoAICamera
 ```
 
-### Pip/venv
+### venv
+
 ```bash
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Hardware
+## Hardware Target
+
 - Raspberry Pi 5
-- Pi Camera (Picamera2 compatible)
-- 2x MG996R continuous rotation servo
-- External servo power source
+- Picamera2-compatible module
+- 2x MG996R continuous servos
+- External servo power
 
-Pins (default):
-- Left servo: GPIO 12
-- Right servo: GPIO 13
+Default pins:
 
-## What Changed in This Refactor
-- Removed contour-based fallback logic from active vision paths
-- Removed HSV/threshold/morphology from active vision paths
-- Standardized to Gaussian + Canny + Hough + PID
-- Converted non-English reasoning text to English
-- Slowed video processor playback significantly for demonstration
-- Added richer debug overlays and telemetry focus on Hough coordinates
+- Left: GPIO 12
+- Right: GPIO 13
 
-## Quick Presentation Script (for your boss)
-1. Run `python video_processor.py`
-2. Show the 3 windows and explain each stage:
-   - Gray: intensity simplification
-   - Blur: noise suppression
-   - Canny: edge extraction with hysteresis
-   - Hough: geometric line extraction
-3. Explain lane center coordinate computation from left/right Hough groups
-4. Explain PID terms (P and D) and final steering command
-5. Show frame-by-frame logs and reasoning text in English
+## Executive Summary (For Boss Presentation)
 
-This gives a full, defensible engineering narrative from pixels to motor command.
+This repository now has:
+
+- Clear and versioned structure
+- Archived earlier implementation snapshot
+- Current strict vision/control stack (Gaussian + Canny + Hough + PID)
+- English debug reasoning and presentation-ready documentation
